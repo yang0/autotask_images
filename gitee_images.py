@@ -6,8 +6,9 @@ except ImportError:
 
 import os
 import base64
-import requests
-from typing import Dict, Any
+import asyncio
+import aiohttp
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 import re
 
@@ -16,17 +17,83 @@ ACCESS_TOKEN = get_api_key(provider="gitee.com", key_name="ACCESS_TOKEN")
 @register_node
 class GiteeImageUploader(Node):
     NAME = "Gitee Image Uploader"
-    DESCRIPTION = "Upload images to Gitee repository and get the download URL"
+    DESCRIPTION = "Upload multiple images (up to 8) to Gitee repository and get their download URLs"
+    CATEGORY = "Image Processing"
+    MAINTAINER = "AutoTask Team"
+    ICON = "📤"
 
     INPUTS = {
-        "image_path": {
-            "label": "Local Image Path",
-            "description": "Path to the local image file to upload",
+        "img1": {
+            "label": "Image 1",
+            "description": "First image file to upload",
             "type": "STRING",
             "widget": "FILE",
             "required": True,
             "default": "",
-            "placeholder": "Select an image file"
+            "placeholder": "Select first image file"
+        },
+        "img2": {
+            "label": "Image 2",
+            "description": "Second image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select second image file"
+        },
+        "img3": {
+            "label": "Image 3",
+            "description": "Third image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select third image file"
+        },
+        "img4": {
+            "label": "Image 4",
+            "description": "Fourth image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select fourth image file"
+        },
+        "img5": {
+            "label": "Image 5",
+            "description": "Fifth image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select fifth image file"
+        },
+        "img6": {
+            "label": "Image 6",
+            "description": "Sixth image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select sixth image file"
+        },
+        "img7": {
+            "label": "Image 7",
+            "description": "Seventh image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select seventh image file"
+        },
+        "img8": {
+            "label": "Image 8",
+            "description": "Eighth image file to upload",
+            "type": "STRING",
+            "widget": "FILE",
+            "required": False,
+            "default": "",
+            "placeholder": "Select eighth image file"
         },
         "repo_url": {
             "label": "Repository URL",
@@ -39,9 +106,63 @@ class GiteeImageUploader(Node):
     }
 
     OUTPUTS = {
-        "image_url": {
-            "label": "Image URL",
-            "description": "Direct download URL of the uploaded image",
+        "url1": {
+            "label": "Image 1 URL",
+            "description": "Download URL of the first uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url2": {
+            "label": "Image 2 URL",
+            "description": "Download URL of the second uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url3": {
+            "label": "Image 3 URL",
+            "description": "Download URL of the third uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url4": {
+            "label": "Image 4 URL",
+            "description": "Download URL of the fourth uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url5": {
+            "label": "Image 5 URL",
+            "description": "Download URL of the fifth uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url6": {
+            "label": "Image 6 URL",
+            "description": "Download URL of the sixth uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url7": {
+            "label": "Image 7 URL",
+            "description": "Download URL of the seventh uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "url8": {
+            "label": "Image 8 URL",
+            "description": "Download URL of the eighth uploaded image",
+            "type": "STRING",
+            "default": ""
+        },
+        "success": {
+            "label": "Success",
+            "description": "Whether all operations were successful",
+            "type": "BOOLEAN",
+            "default": False
+        },
+        "error_message": {
+            "label": "Error Message",
+            "description": "Error message if any operation failed",
             "type": "STRING",
             "default": ""
         }
@@ -75,52 +196,112 @@ class GiteeImageUploader(Node):
         now = datetime.now()
         return f"images/{now.year}/{now.month:02d}/{now.day:02d}"
 
-    async def execute(self, node_inputs: Dict[str, Any], workflow_logger) -> Dict[str, Any]:
-        try:
-            image_path = node_inputs["image_path"]
-            repo_url = node_inputs["repo_url"]
+    def _get_valid_image_paths(self, node_inputs: Dict[str, str]) -> List[Tuple[int, str]]:
+        """Get all valid image paths from inputs with their indices."""
+        valid_images = []
+        for i in range(1, 9):
+            img_key = f"img{i}"
+            if img_key in node_inputs and node_inputs[img_key]:
+                valid_images.append((i, node_inputs[img_key]))
+        return valid_images
 
-            # Parse repository information
-            owner, repo = self._parse_repo_url(repo_url)
-            target_dir = self._get_target_dir()
-            
-            workflow_logger.info(f"Uploading image to Gitee repository: {owner}/{repo}")
-            workflow_logger.info(f"Target directory: {target_dir}")
-            
+    def _get_timestamped_filename(self, original_filename: str) -> str:
+        """Add timestamp to filename while preserving extension."""
+        name, ext = os.path.splitext(original_filename)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"{name}_{timestamp}{ext}"
+
+    async def _upload_single_image(self, session: aiohttp.ClientSession, image_path: str, owner: str, repo: str, 
+                                 target_dir: str, index: int, workflow_logger) -> Dict[str, Any]:
+        """Upload a single image to Gitee and return its URL."""
+        try:
             # Read and encode image
             with open(image_path, "rb") as f:
                 content = f.read()
             b64_content = base64.b64encode(content).decode('utf-8')
             
+            # Get original filename and create timestamped version
+            original_filename = os.path.basename(image_path)
+            filename = self._get_timestamped_filename(original_filename)
+            
             # Prepare API request
-            filename = os.path.basename(image_path)
             api_url = f"https://gitee.com/api/v5/repos/{owner}/{repo}/contents/{target_dir}/{filename}"
             
             payload = {
                 "access_token": ACCESS_TOKEN,
                 "content": b64_content,
                 "branch": "master",
-                "message": f"Upload image: {filename}"
+                "message": f"Upload image: {filename} (original: {original_filename})"
             }
             
-            # Send request
-            response = requests.post(api_url, json=payload)
-            response.raise_for_status()
-            result = response.json()
+            # Send request using aiohttp session
+            async with session.post(api_url, json=payload) as response:
+                response_text = await response.text()
+                # Accept both 200 (OK) and 201 (Created) status codes
+                if response.status not in [200, 201]:
+                    raise ValueError(f"API request failed with status {response.status}: {response_text}")
+                
+                result = await response.json()
+                if "content" not in result or "download_url" not in result["content"]:
+                    raise ValueError(f"Invalid API response format: {response_text}")
             
-            workflow_logger.info(f"Successfully uploaded image: {filename}")
-            
+            workflow_logger.info(f"Successfully uploaded image {index}: {filename}")
             return {
+                "index": index,
                 "success": True,
-                "image_url": result["content"]["download_url"]
+                "url": result["content"]["download_url"]
+            }
+        except Exception as e:
+            error_msg = f"Failed to upload image {index} ({os.path.basename(image_path)}): {str(e)}"
+            workflow_logger.error(error_msg)
+            return {
+                "index": index,
+                "success": False,
+                "error_message": error_msg
             }
 
+    async def execute(self, node_inputs: Dict[str, str], workflow_logger) -> Dict[str, Any]:
+        try:
+            image_paths = self._get_valid_image_paths(node_inputs)
+            if not image_paths:
+                raise ValueError("At least one image path must be provided")
+
+            repo_url = node_inputs["repo_url"]
+            owner, repo = self._parse_repo_url(repo_url)
+            target_dir = self._get_target_dir()
+            
+            workflow_logger.info(f"Uploading {len(image_paths)} images to Gitee repository: {owner}/{repo}")
+            workflow_logger.info(f"Target directory: {target_dir}")
+
+            # Initialize results dictionary with empty values
+            results = {f"url{i}": "" for i in range(1, 9)}
+            results.update({"success": True, "error_message": ""})
+
+            # Create aiohttp session for connection pooling
+            async with aiohttp.ClientSession() as session:
+                # Upload images sequentially
+                for index, image_path in image_paths:
+                    result = await self._upload_single_image(session, image_path, owner, repo, target_dir, index, workflow_logger)
+                    
+                    if result["success"]:
+                        results[f"url{result['index']}"] = result["url"]
+                    else:
+                        results["success"] = False
+                        results["error_message"] = result["error_message"]
+                        break
+
+            if results["success"]:
+                workflow_logger.info("All images uploaded successfully")
+
+            return results
+
         except Exception as e:
-            error_msg = f"Failed to upload image: {str(e)}"
+            error_msg = f"Failed to process images: {str(e)}"
             workflow_logger.error(error_msg)
             return {
                 "success": False,
-                "error_message": error_msg
+                "error_message": error_msg,
+                **{f"url{i}": "" for i in range(1, 9)}
             }
 
 
