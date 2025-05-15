@@ -1,4 +1,4 @@
-from .gitee_images import *
+from .uploader_postimage import *
 
 VERSION = "1.0.0"
 GIT_URL = "https://gitee.com/yang02010/autotask-plugins"
